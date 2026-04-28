@@ -53,7 +53,7 @@ Set `params.cnv_method` in `nextflow.config`:
 
 The CNVkit path is now WGS-first (`params.cnvkit_seq_method = 'wgs'`) so it works for whole-genome data instead of only WES/hybrid capture assumptions.
 
-- In WGS mode, the workflow uses a single grouped `cnvkit.py batch` per reference group (cases + normals), matching the standard CNVkit command style (e.g. `batch Tumor*.bam -n Normal*.bam -m wgs -f ref.fa`).
+- In WGS mode, the workflow uses a single grouped `cnvkit.py batch` across all case and normal BAMs, matching the standard CNVkit command style (e.g. `batch Tumor*.bam -n Normal*.bam -m wgs -f ref.fa`).
 - Optional `--access` is passed in WGS mode when `params.access_bed` is provided.
 - In hybrid/amplicon mode, it uses `--targets` and `--antitargets` as before.
 - `params.cnvkit_no_edge = true` is enabled by default, matching CNVkit WGS recommendations.

@@ -394,20 +394,32 @@ workflow {
     MULTIQC(multiqc_inputs)
 
     if (cnvMethods.contains('cnvkit')) {
-        normal_bams_by_group = BWA_MEM_FILTER.out.bam
+        normal_bams_all = BWA_MEM_FILTER.out.bam
             .filter { meta, bam, bai, flagstat -> normalRoles.contains(meta.role.toLowerCase()) }
-            .map { meta, bam, bai, flagstat -> tuple(meta.group, bam, bai) }
-            .groupTuple()
+            .map { meta, bam, bai, flagstat -> bam }
+            .collect()
 
-        case_bams_by_group = BWA_MEM_FILTER.out.bam
+        normal_bais_all = BWA_MEM_FILTER.out.bam
+            .filter { meta, bam, bai, flagstat -> normalRoles.contains(meta.role.toLowerCase()) }
+            .map { meta, bam, bai, flagstat -> bai }
+            .collect()
+
+        case_bams_all = BWA_MEM_FILTER.out.bam
             .filter { meta, bam, bai, flagstat -> !normalRoles.contains(meta.role.toLowerCase()) }
-            .map { meta, bam, bai, flagstat -> tuple(meta.group, bam, bai) }
-            .groupTuple()
+            .map { meta, bam, bai, flagstat -> bam }
+            .collect()
 
-        case_bams_by_group
-            .join(normal_bams_by_group)
-            .map { group, case_bams, case_bais, normal_bams, normal_bais ->
-                tuple(group, case_bams, case_bais, normal_bams, normal_bais)
+        case_bais_all = BWA_MEM_FILTER.out.bam
+            .filter { meta, bam, bai, flagstat -> !normalRoles.contains(meta.role.toLowerCase()) }
+            .map { meta, bam, bai, flagstat -> bai }
+            .collect()
+
+        case_bams_all
+            .combine(case_bais_all)
+            .combine(normal_bams_all)
+            .combine(normal_bais_all)
+            .map { case_bams, case_bais, normal_bams, normal_bais ->
+                tuple('all_samples', case_bams, case_bais, normal_bams, normal_bais)
             }
             .set { cnvkit_group_inputs }
 

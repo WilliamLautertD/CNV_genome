@@ -4,11 +4,20 @@ nextflow.enable.dsl = 2
 
 def normalRoles = ['normal', 'control', 'reference'] as Set
 def cnvMethods = params.cnv_method.tokenize(',').collect { it.trim().toLowerCase() } as Set
+def cnvkitSeqMethod = (params.cnvkit_seq_method ?: 'wgs').toLowerCase()
+def cnvkitAnnotateEnabled = params.cnvkit_annotate in [true, 'true', 'True', 'TRUE']
+def cnvkitRefflat = params.cnvkit_refflat ?: ''
 if (cnvMethods.contains('both')) {
     cnvMethods = ['cnvkit', 'gatk'] as Set
 }
 if (!cnvMethods.every { it in ['cnvkit', 'gatk'] }) {
     error "params.cnv_method must be 'cnvkit', 'gatk', or 'both'"
+}
+if (!(cnvkitSeqMethod in ['wgs', 'hybrid', 'amplicon'])) {
+    error "params.cnvkit_seq_method must be 'wgs', 'hybrid', or 'amplicon'"
+}
+if (cnvkitAnnotateEnabled && !cnvkitRefflat) {
+    error "params.cnvkit_annotate is true, but params.cnvkit_refflat is empty. Set params.cnvkit_refflat to a refFlat annotation file."
 }
 
 process FASTQC_RAW {
@@ -159,12 +168,21 @@ process CNVKIT_REFERENCE {
     tuple val(group), path("${group}.cnn"), emit: reference
 
     script:
+    def isWgs = cnvkitSeqMethod == 'wgs'
+    def methodArg = isWgs ? '--method wgs' : "--method ${cnvkitSeqMethod}"
+    def regionArgs = isWgs
+        ? (params.access_bed ? "--access ${params.access_bed}" : '')
+        : "--targets ${params.targets_bed} --antitargets ${params.antitargets_bed}"
+    def annotateArg = cnvkitAnnotateEnabled ? "--annotate ${cnvkitRefflat}" : ''
+    def edgeArg = params.cnvkit_no_edge ? '--no-edge' : ''
     """
     cnvkit.py batch \
       --normal ${normal_bams} \
-      --targets ${params.targets_bed} \
-      --antitargets ${params.antitargets_bed} \
+      ${methodArg} \
+      ${regionArgs} \
       --fasta ${params.reference_fasta} \
+      ${annotateArg} \
+      ${edgeArg} \
       --output-reference ${group}.cnn \
       --output-dir reference_work_${group} \
       --processes ${task.cpus}
@@ -188,9 +206,11 @@ process CNVKIT_BATCH {
     tuple val(meta), path("${meta.id}.marked.filtered.cns"), emit: cns
 
     script:
+    def methodArg = cnvkitSeqMethod == 'wgs' ? '--method wgs' : "--method ${cnvkitSeqMethod}"
     def drop = params.cnvkit_drop_low_coverage ? '--drop-low-coverage' : ''
     """
     cnvkit.py batch ${bam} \
+      ${methodArg} \
       --reference ${reference} \
       --output-dir . \
       --diagram \

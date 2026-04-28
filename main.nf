@@ -5,7 +5,8 @@ nextflow.enable.dsl = 2
 def normalRoles = ['normal', 'control', 'reference'] as Set
 def cnvMethods = params.cnv_method.tokenize(',').collect { it.trim().toLowerCase() } as Set
 def cnvkitSeqMethod = (params.cnvkit_seq_method ?: 'wgs').toLowerCase()
-def cnvkitAnnotate = (params.cnvkit_annotate ?: params.annotate ?: params.refflat ?: '').toString().trim()
+def cnvkitAnnotateEnabled = params.cnvkit_annotate in [true, 'true', 'True', 'TRUE']
+def cnvkitRefflat = params.cnvkit_refflat ?: ''
 if (cnvMethods.contains('both')) {
     cnvMethods = ['cnvkit', 'gatk'] as Set
 }

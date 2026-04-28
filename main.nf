@@ -16,9 +16,6 @@ if (!cnvMethods.every { it in ['cnvkit', 'gatk'] }) {
 if (!(cnvkitSeqMethod in ['wgs', 'hybrid', 'amplicon'])) {
     error "params.cnvkit_seq_method must be 'wgs', 'hybrid', or 'amplicon'"
 }
-if (cnvkitAnnotateEnabled && !cnvkitRefflat) {
-    error "params.cnvkit_annotate is true, but params.cnvkit_refflat is empty. Set params.cnvkit_refflat to a refFlat annotation file."
-}
 
 process FASTQC_RAW {
     tag "${meta.id}"
@@ -173,7 +170,7 @@ process CNVKIT_REFERENCE {
     def regionArgs = isWgs
         ? (params.access_bed ? "--access ${params.access_bed}" : '')
         : "--targets ${params.targets_bed} --antitargets ${params.antitargets_bed}"
-    def annotateArg = cnvkitAnnotateEnabled ? "--annotate ${cnvkitRefflat}" : ''
+    def annotateArg = cnvkitAnnotate ? "--annotate ${cnvkitAnnotate}" : ''
     def edgeArg = params.cnvkit_no_edge ? '--no-edge' : ''
     """
     cnvkit.py batch \

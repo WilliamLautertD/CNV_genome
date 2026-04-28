@@ -5,6 +5,8 @@ nextflow.enable.dsl = 2
 def normalRoles = ['normal', 'control', 'reference'] as Set
 def cnvMethods = params.cnv_method.tokenize(',').collect { it.trim().toLowerCase() } as Set
 def cnvkitSeqMethod = (params.cnvkit_seq_method ?: 'wgs').toLowerCase()
+def cnvkitAnnotateEnabled = params.cnvkit_annotate in [true, 'true', 'True', 'TRUE']
+def cnvkitRefflat = params.cnvkit_refflat ?: ''
 if (cnvMethods.contains('both')) {
     cnvMethods = ['cnvkit', 'gatk'] as Set
 }
@@ -13,6 +15,9 @@ if (!cnvMethods.every { it in ['cnvkit', 'gatk'] }) {
 }
 if (!(cnvkitSeqMethod in ['wgs', 'hybrid', 'amplicon'])) {
     error "params.cnvkit_seq_method must be 'wgs', 'hybrid', or 'amplicon'"
+}
+if (cnvkitAnnotateEnabled && !cnvkitRefflat) {
+    error "params.cnvkit_annotate is true, but params.cnvkit_refflat is empty. Set params.cnvkit_refflat to a refFlat annotation file."
 }
 
 process FASTQC_RAW {
@@ -168,7 +173,7 @@ process CNVKIT_REFERENCE {
     def regionArgs = isWgs
         ? (params.access_bed ? "--access ${params.access_bed}" : '')
         : "--targets ${params.targets_bed} --antitargets ${params.antitargets_bed}"
-    def annotateArg = params.cnvkit_annotate ? "--annotate ${params.cnvkit_annotate}" : ''
+    def annotateArg = cnvkitAnnotateEnabled ? "--annotate ${cnvkitRefflat}" : ''
     def edgeArg = params.cnvkit_no_edge ? '--no-edge' : ''
     """
     cnvkit.py batch \

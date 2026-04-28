@@ -56,7 +56,7 @@ The CNVkit path is now WGS-first (`params.cnvkit_seq_method = 'wgs'`) so it work
 - In WGS mode, the workflow runs `cnvkit.py batch --method wgs` and uses sequencing-accessible regions (`--access`) when provided; otherwise CNVkit computes access regions from the FASTA internally.
 - In hybrid/amplicon mode, it uses `--targets` and `--antitargets` as before.
 - `params.cnvkit_no_edge = true` is enabled by default, matching CNVkit WGS recommendations.
-- Optional gene labels can be supplied with `params.cnvkit_annotate` (e.g., `refFlat.txt`) for better output annotation on WGS runs.
+- To enable gene labels, set `params.cnvkit_annotate = true` and provide the annotation file path in `params.cnvkit_refflat` (e.g., `/refs/refFlat.txt`).
 
 Samples with `cnv_role` set to `normal`, `control`, or `reference` are used for CNV references. Other roles, such as `case` or `treated`, are CNV-called against their `cnv_reference_group`.
 

@@ -53,8 +53,8 @@ Set `params.cnv_method` in `nextflow.config`:
 
 The CNVkit path is now WGS-first (`params.cnvkit_seq_method = 'wgs'`) so it works for whole-genome data instead of only WES/hybrid capture assumptions.
 
-- In WGS mode, the workflow runs `cnvkit.py batch --method wgs` and uses sequencing-accessible regions (`--access`) when provided; otherwise CNVkit computes access regions from the FASTA internally.
-- CNVkit reference building now uses explicit intermediate files (`cnvkit.py coverage` on each normal BAM, then `cnvkit.py reference`) instead of `cnvkit.py batch --normal`, so normal BAM indexes are staged and consumed directly.
+- In WGS mode, the workflow uses a single grouped `cnvkit.py batch` per reference group (cases + normals), matching the standard CNVkit command style (e.g. `batch Tumor*.bam -n Normal*.bam -m wgs -f ref.fa`).
+- Optional `--access` is passed in WGS mode when `params.access_bed` is provided.
 - In hybrid/amplicon mode, it uses `--targets` and `--antitargets` as before.
 - `params.cnvkit_no_edge = true` is enabled by default, matching CNVkit WGS recommendations.
 - To enable gene labels, either set `params.cnvkit_annotate` directly to the refFlat path, or set `params.cnvkit_annotate = 'true'` and provide `params.cnvkit_refflat = '/refs/refFlat.txt'`.

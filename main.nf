@@ -145,7 +145,11 @@ process BWA_MEM_FILTER {
     script:
     def ref = params.bwa_index_prefix ?: params.reference_fasta
     """
+    set -euo pipefail
+
     bwa mem -t ${task.cpus} ${ref} ${r1} ${r2} \
+      2> ${meta.id}.bwa.stderr.log \
+      | tee >(samtools view -@ ${task.cpus} -c - > ${meta.id}.bwa_sam_count.txt) \
       | samtools collate -@ ${task.cpus} -O -u - \
       | samtools fixmate -@ ${task.cpus} -m -u - - \
       | samtools sort -@ ${task.cpus} -u - \
@@ -153,8 +157,20 @@ process BWA_MEM_FILTER {
       | samtools view -@ ${task.cpus} -b -q ${params.min_mapq} -F ${params.exclude_flags} - \
       | samtools sort -@ ${task.cpus} -o ${meta.id}.filtered.bam -
 
+    final_count=\$(samtools view -@ ${task.cpus} -c ${meta.id}.filtered.bam)
+    if [[ "\${final_count}" -eq 0 ]]; then
+      echo "ERROR: ${meta.id}.filtered.bam has zero alignments after filtering. See ${meta.id}.bwa.stderr.log and ${meta.id}.bwa_sam_count.txt" >&2
+      exit 1
+    fi
+
     samtools index -@ ${task.cpus} ${meta.id}.filtered.bam
     samtools flagstat -@ ${task.cpus} -O tsv ${meta.id}.filtered.bam > ${meta.id}.flagstat.tsv
+    {
+      echo "# bwa_sam_count"
+      cat ${meta.id}.bwa_sam_count.txt
+      echo "# filtered_bam_count"
+      echo "\${final_count}"
+    } > ${meta.id}.mapping_diagnostics.txt
     """
 
     stub:
@@ -390,6 +406,15 @@ process GATK_CALL_SEGMENTS {
 }
 
 workflow {
+    def sampleRows = file(params.samples).readLines().findAll { it?.trim() }
+    def header = sampleRows[0].split('\t', -1) as List
+    def sampleMaps = sampleRows.drop(1).collect { line ->
+        def cols = line.split('\t', -1) as List
+        [header, cols].transpose().collectEntries { k, v -> [(k): v] }
+    }
+    def expectedCaseCount = sampleMaps.count { row -> !normalRoles.contains((row.cnv_role ?: '').toLowerCase()) }
+    def expectedNormalCount = sampleMaps.count { row -> normalRoles.contains((row.cnv_role ?: '').toLowerCase()) }
+
     samples_ch = Channel
         .fromPath(params.samples)
         .splitCsv(header: true, sep: '\t')
@@ -457,6 +482,9 @@ workflow {
                     }
                 }
 
+                if (caseBams.size() != expectedCaseCount || normalBams.size() != expectedNormalCount) {
+                    error "CNVKIT input BAM count mismatch: expected ${expectedCaseCount} case + ${expectedNormalCount} normal BAMs, got ${caseBams.size()} case + ${normalBams.size()} normal. Re-run without -resume after cleaning stale BWA work dirs."
+                }
                 tuple('all_samples', caseBams, caseBais, normalBams, normalBais)
             }
             .filter { group, caseBams, caseBais, normalBams, normalBais ->

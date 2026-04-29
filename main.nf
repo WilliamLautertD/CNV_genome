@@ -24,6 +24,7 @@ if (cnvkitAnnotateAsBool && !cnvkitRefflatPath) {
 process FASTQC_RAW {
     tag "${meta.id}"
     publishDir "${params.outdir}/qc/raw/${meta.id}", mode: 'copy'
+    errorStrategy 'ignore'
 
     input:
     tuple val(meta), path(reads)
@@ -82,6 +83,7 @@ process FASTP_TRIM {
 process FASTQC_TRIMMED {
     tag "${meta.id}"
     publishDir "${params.outdir}/qc/trimmed/${meta.id}", mode: 'copy'
+    errorStrategy 'ignore'
 
     input:
     tuple val(meta), path(r1), path(r2)
@@ -112,29 +114,28 @@ process BWA_MEM_FILTER {
     tuple val(meta), path(r1), path(r2)
 
     output:
-    tuple val(meta), path("${meta.id}.marked.filtered.bam"), path("${meta.id}.marked.filtered.bam.bai"), path("${meta.id}.marked.filtered.flagstat.tsv"), emit: bam
+    tuple val(meta), path("${meta.id}.filtered.bam"), path("${meta.id}.filtered.bam.bai"), path("${meta.id}.flagstat.tsv"), emit: bam
 
     script:
     def ref = params.bwa_index_prefix ?: params.reference_fasta
-    def readGroup = "@RG\\tID:${meta.id}\\tLB:${meta.library}\\tPL:${params.read_group_platform}\\tPU:${meta.unit}\\tSM:${meta.id}"
     """
-    bwa mem -t ${task.cpus} -R '${readGroup}' ${ref} ${r1} ${r2} \
+    bwa mem -t ${task.cpus} ${ref} ${r1} ${r2} \
       | samtools collate -@ ${task.cpus} -O -u - \
       | samtools fixmate -@ ${task.cpus} -m -u - - \
       | samtools sort -@ ${task.cpus} -u - \
       | samtools markdup -@ ${task.cpus} - - \
       | samtools view -@ ${task.cpus} -b -q ${params.min_mapq} -F ${params.exclude_flags} - \
-      | samtools sort -@ ${task.cpus} -o ${meta.id}.marked.filtered.bam -
+      | samtools sort -@ ${task.cpus} -o ${meta.id}.filtered.bam -
 
-    samtools index -@ ${task.cpus} ${meta.id}.marked.filtered.bam
-    samtools flagstat -@ ${task.cpus} -O tsv ${meta.id}.marked.filtered.bam > ${meta.id}.marked.filtered.flagstat.tsv
+    samtools index -@ ${task.cpus} ${meta.id}.filtered.bam
+    samtools flagstat -@ ${task.cpus} -O tsv ${meta.id}.filtered.bam > ${meta.id}.flagstat.tsv
     """
 
     stub:
     """
-    touch ${meta.id}.marked.filtered.bam
-    touch ${meta.id}.marked.filtered.bam.bai
-    touch ${meta.id}.marked.filtered.flagstat.tsv
+    touch ${meta.id}.filtered.bam
+    touch ${meta.id}.filtered.bam.bai
+    touch ${meta.id}.flagstat.tsv
     """
 }
 

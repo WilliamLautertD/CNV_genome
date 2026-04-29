@@ -418,8 +418,8 @@ workflow {
             .combine(case_bais_all)
             .combine(normal_bams_all)
             .combine(normal_bais_all)
-            .map { case_bams, case_bais, normal_bams, normal_bais ->
-                tuple('all_samples', case_bams, case_bais, normal_bams, normal_bais)
+            .map { vals ->
+                tuple('all_samples', vals[0], vals[1], vals[2], vals[3])
             }
             .set { cnvkit_group_inputs }
 

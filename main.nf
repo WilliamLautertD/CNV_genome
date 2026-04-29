@@ -24,6 +24,7 @@ if (cnvkitAnnotateAsBool && !cnvkitRefflatPath) {
 process FASTQC_RAW {
     tag "${meta.id}"
     publishDir "${params.outdir}/qc/raw/${meta.id}", mode: 'copy'
+    errorStrategy 'ignore'
 
     input:
     tuple val(meta), path(reads)
@@ -95,6 +96,7 @@ process FASTP_TRIM {
 process FASTQC_TRIMMED {
     tag "${meta.id}"
     publishDir "${params.outdir}/qc/trimmed/${meta.id}", mode: 'copy'
+    errorStrategy 'ignore'
 
     input:
     tuple val(meta), path(r1), path(r2)

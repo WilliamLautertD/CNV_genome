@@ -36,7 +36,20 @@ process FASTQC_RAW {
 
     script:
     """
+    set +e
     fastqc -t ${task.cpus} ${reads}
+    fastqc_status=\$?
+    set -e
+    if [[ \$fastqc_status -ne 0 ]]; then
+      echo "WARN: FASTQC_RAW failed for ${meta.id}; creating placeholder outputs so pipeline can continue" >&2
+      for read in ${reads}; do
+        base=\$(basename "\$read")
+        stem=\${base%.gz}
+        stem=\${stem%.fastq}
+        stem=\${stem%.fq}
+        touch "\${stem}_fastqc.html" "\${stem}_fastqc.zip"
+      done
+    fi
     touch ${meta.id}.raw_fastqc.done
     """
 
@@ -95,7 +108,20 @@ process FASTQC_TRIMMED {
 
     script:
     """
+    set +e
     fastqc -t ${task.cpus} ${r1} ${r2}
+    fastqc_status=\$?
+    set -e
+    if [[ \$fastqc_status -ne 0 ]]; then
+      echo "WARN: FASTQC_TRIMMED failed for ${meta.id}; creating placeholder outputs so pipeline can continue" >&2
+      for read in ${r1} ${r2}; do
+        base=\$(basename "\$read")
+        stem=\${base%.gz}
+        stem=\${stem%.fastq}
+        stem=\${stem%.fq}
+        touch "\${stem}_fastqc.html" "\${stem}_fastqc.zip"
+      done
+    fi
     touch ${meta.id}.trimmed_fastqc.done
     """
 

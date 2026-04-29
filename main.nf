@@ -24,6 +24,7 @@ if (cnvkitAnnotateAsBool && !cnvkitRefflatPath) {
 process FASTQC_RAW {
     tag "${meta.id}"
     publishDir "${params.outdir}/qc/raw/${meta.id}", mode: 'copy'
+    errorStrategy 'ignore'
 
     input:
     tuple val(meta), path(reads)
@@ -82,6 +83,7 @@ process FASTP_TRIM {
 process FASTQC_TRIMMED {
     tag "${meta.id}"
     publishDir "${params.outdir}/qc/trimmed/${meta.id}", mode: 'copy'
+    errorStrategy 'ignore'
 
     input:
     tuple val(meta), path(r1), path(r2)
@@ -112,29 +114,44 @@ process BWA_MEM_FILTER {
     tuple val(meta), path(r1), path(r2)
 
     output:
-    tuple val(meta), path("${meta.id}.marked.filtered.bam"), path("${meta.id}.marked.filtered.bam.bai"), path("${meta.id}.marked.filtered.flagstat.tsv"), emit: bam
+    tuple val(meta), path("${meta.id}.filtered.bam"), path("${meta.id}.filtered.bam.bai"), path("${meta.id}.flagstat.tsv"), emit: bam
 
     script:
     def ref = params.bwa_index_prefix ?: params.reference_fasta
-    def readGroup = "@RG\\tID:${meta.id}\\tLB:${meta.library}\\tPL:${params.read_group_platform}\\tPU:${meta.unit}\\tSM:${meta.id}"
     """
-    bwa mem -t ${task.cpus} -R '${readGroup}' ${ref} ${r1} ${r2} \
+    set -euo pipefail
+
+    bwa mem -t ${task.cpus} ${ref} ${r1} ${r2} \
+      2> ${meta.id}.bwa.stderr.log \
+      | tee >(samtools view -@ ${task.cpus} -c - > ${meta.id}.bwa_sam_count.txt) \
       | samtools collate -@ ${task.cpus} -O -u - \
       | samtools fixmate -@ ${task.cpus} -m -u - - \
       | samtools sort -@ ${task.cpus} -u - \
       | samtools markdup -@ ${task.cpus} - - \
       | samtools view -@ ${task.cpus} -b -q ${params.min_mapq} -F ${params.exclude_flags} - \
-      | samtools sort -@ ${task.cpus} -o ${meta.id}.marked.filtered.bam -
+      | samtools sort -@ ${task.cpus} -o ${meta.id}.filtered.bam -
 
-    samtools index -@ ${task.cpus} ${meta.id}.marked.filtered.bam
-    samtools flagstat -@ ${task.cpus} -O tsv ${meta.id}.marked.filtered.bam > ${meta.id}.marked.filtered.flagstat.tsv
+    final_count=\$(samtools view -@ ${task.cpus} -c ${meta.id}.filtered.bam)
+    if [[ "\${final_count}" -eq 0 ]]; then
+      echo "ERROR: ${meta.id}.filtered.bam has zero alignments after filtering. See ${meta.id}.bwa.stderr.log and ${meta.id}.bwa_sam_count.txt" >&2
+      exit 1
+    fi
+
+    samtools index -@ ${task.cpus} ${meta.id}.filtered.bam
+    samtools flagstat -@ ${task.cpus} -O tsv ${meta.id}.filtered.bam > ${meta.id}.flagstat.tsv
+    {
+      echo "# bwa_sam_count"
+      cat ${meta.id}.bwa_sam_count.txt
+      echo "# filtered_bam_count"
+      echo "\${final_count}"
+    } > ${meta.id}.mapping_diagnostics.txt
     """
 
     stub:
     """
-    touch ${meta.id}.marked.filtered.bam
-    touch ${meta.id}.marked.filtered.bam.bai
-    touch ${meta.id}.marked.filtered.flagstat.tsv
+    touch ${meta.id}.filtered.bam
+    touch ${meta.id}.filtered.bam.bai
+    touch ${meta.id}.flagstat.tsv
     """
 }
 
@@ -363,6 +380,15 @@ process GATK_CALL_SEGMENTS {
 }
 
 workflow {
+    def sampleRows = file(params.samples).readLines().findAll { it?.trim() }
+    def header = sampleRows[0].split('\t', -1) as List
+    def sampleMaps = sampleRows.drop(1).collect { line ->
+        def cols = line.split('\t', -1) as List
+        [header, cols].transpose().collectEntries { k, v -> [(k): v] }
+    }
+    def expectedCaseCount = sampleMaps.count { row -> !normalRoles.contains((row.cnv_role ?: '').toLowerCase()) }
+    def expectedNormalCount = sampleMaps.count { row -> normalRoles.contains((row.cnv_role ?: '').toLowerCase()) }
+
     samples_ch = Channel
         .fromPath(params.samples)
         .splitCsv(header: true, sep: '\t')
@@ -430,6 +456,9 @@ workflow {
                     }
                 }
 
+                if (caseBams.size() != expectedCaseCount || normalBams.size() != expectedNormalCount) {
+                    error "CNVKIT input BAM count mismatch: expected ${expectedCaseCount} case + ${expectedNormalCount} normal BAMs, got ${caseBams.size()} case + ${normalBams.size()} normal. Re-run without -resume after cleaning stale BWA work dirs."
+                }
                 tuple('all_samples', caseBams, caseBais, normalBams, normalBais)
             }
             .filter { group, caseBams, caseBais, normalBams, normalBais ->

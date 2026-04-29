@@ -49,6 +49,18 @@ Set `params.cnv_method` in `nextflow.config`:
 - `gatk` - preprocess target intervals, collect read counts, build a panel of normals, denoise, segment, and call `.called.seg` files.
 - `both` - run both CNVkit and GATK CNV outputs from the same marked BAMs.
 
+### CNVkit WGS support
+
+The CNVkit path is now WGS-first (`params.cnvkit_seq_method = 'wgs'`) so it works for whole-genome data instead of only WES/hybrid capture assumptions.
+
+- In WGS mode, the workflow uses a single grouped `cnvkit.py batch` across all case and normal BAMs, matching the standard CNVkit command style (e.g. `batch Tumor*.bam -n Normal*.bam -m wgs -f ref.fa`).
+- Optional `--access` is passed in WGS mode when `params.access_bed` is provided.
+- In hybrid/amplicon mode, it uses `--targets` and `--antitargets` as before.
+- `params.cnvkit_no_edge = true` is enabled by default, matching CNVkit WGS recommendations.
+- To enable gene labels, either set `params.cnvkit_annotate` directly to the refFlat path, or set `params.cnvkit_annotate = 'true'` and provide `params.cnvkit_refflat = '/refs/refFlat.txt'`.
+- Backward compatibility: `params.annotate` and `params.refflat` are accepted aliases.
+- CNVkit outputs include both per-sample `.cnr` and `.cns` files (plus `.called.cns` after `cnvkit.py call`).
+
 Samples with `cnv_role` set to `normal`, `control`, or `reference` are used for CNV references. Other roles, such as `case` or `treated`, are CNV-called against their `cnv_reference_group`.
 
 ## Generic ChIP-seq Nextflow workflow

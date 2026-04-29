@@ -26,6 +26,8 @@ Edit `nextflow.config`:
 
 ## Run
 
+Use Nextflow 26.04.0 or newer (recommended).
+
 ```bash
 conda env create -f env/qc_mapping_cnv.yaml
 conda activate qc_mapping_cnv

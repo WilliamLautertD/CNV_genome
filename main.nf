@@ -4,11 +4,21 @@ nextflow.enable.dsl = 2
 
 def normalRoles = ['normal', 'control', 'reference'] as Set
 def cnvMethods = params.cnv_method.tokenize(',').collect { it.trim().toLowerCase() } as Set
+def cnvkitSeqMethod = (params.cnvkit_seq_method ?: 'wgs').toLowerCase()
 if (cnvMethods.contains('both')) {
     cnvMethods = ['cnvkit', 'gatk'] as Set
 }
 if (!cnvMethods.every { it in ['cnvkit', 'gatk'] }) {
     error "params.cnv_method must be 'cnvkit', 'gatk', or 'both'"
+}
+if (!(cnvkitSeqMethod in ['wgs', 'hybrid', 'amplicon'])) {
+    error "params.cnvkit_seq_method must be 'wgs', 'hybrid', or 'amplicon'"
+}
+def cnvkitAnnotateRaw = (params.cnvkit_annotate ?: params.annotate ?: params.cnvkit_refflat ?: params.refflat ?: '').toString().trim()
+def cnvkitAnnotateAsBool = cnvkitAnnotateRaw.toLowerCase() in ['true', 'yes', '1']
+def cnvkitRefflatPath = (params.cnvkit_refflat ?: params.refflat ?: '').toString().trim()
+if (cnvkitAnnotateAsBool && !cnvkitRefflatPath) {
+    error "cnvkit_annotate is set to true, but no refFlat path was provided. Set params.cnvkit_refflat (or params.refflat) to the refFlat file path."
 }
 
 process FASTQC_RAW {
@@ -148,82 +158,53 @@ process MULTIQC {
     """
 }
 
-process CNVKIT_REFERENCE {
+process CNVKIT_BATCH_GROUP {
     tag "${group}"
-    publishDir "${params.outdir}/cnvkit/references", mode: 'copy'
+    publishDir "${params.outdir}/cnvkit/${group}", mode: 'copy'
 
     input:
-    tuple val(group), path(normal_bams)
+    tuple val(group), path(case_bams), path(case_bais), path(normal_bams), path(normal_bais)
 
     output:
-    tuple val(group), path("${group}.cnn"), emit: reference
+    path("*.cns"), emit: cns
+    path("*.called.cns"), emit: called
 
     script:
-    """
-    cnvkit.py batch \
-      --normal ${normal_bams} \
-      --targets ${params.targets_bed} \
-      --antitargets ${params.antitargets_bed} \
-      --fasta ${params.reference_fasta} \
-      --output-reference ${group}.cnn \
-      --output-dir reference_work_${group} \
-      --processes ${task.cpus}
-    """
-
-    stub:
-    """
-    touch ${group}.cnn
-    """
-}
-
-process CNVKIT_BATCH {
-    tag "${meta.id}"
-    publishDir "${params.outdir}/cnvkit/${meta.id}", mode: 'copy'
-
-    input:
-    tuple val(meta), path(bam), path(bai), path(flagstat)
-    tuple val(group), path(reference)
-
-    output:
-    tuple val(meta), path("${meta.id}.marked.filtered.cns"), emit: cns
-
-    script:
+    def seqMethod = (params.cnvkit_seq_method ?: 'wgs').toLowerCase()
+    def methodArg = "--method ${seqMethod}"
     def drop = params.cnvkit_drop_low_coverage ? '--drop-low-coverage' : ''
+    def annotateRaw = (params.cnvkit_annotate ?: params.annotate ?: params.cnvkit_refflat ?: params.refflat ?: '').toString().trim()
+    def annotateAsBool = annotateRaw.toLowerCase() in ['true', 'yes', '1']
+    def refflatPath = (params.cnvkit_refflat ?: params.refflat ?: '').toString().trim()
+    def annotatePath = annotateAsBool ? refflatPath : annotateRaw
+    def annotateArg = annotatePath ? "--annotate ${annotatePath}" : ''
+    def edgeArg = params.cnvkit_no_edge ? '--no-edge' : ''
+    def accessArg = (seqMethod == 'wgs' && params.access_bed) ? "--access ${params.access_bed}" : ''
+    def caseArgs = case_bams.collect { it.toString() }.join(' ')
+    def normalArgs = normal_bams.collect { it.toString() }.join(' ')
     """
-    cnvkit.py batch ${bam} \
-      --reference ${reference} \
+    cnvkit.py batch ${caseArgs} \
+      --normal ${normalArgs} \
+      ${methodArg} \
+      --fasta ${params.reference_fasta} \
+      ${accessArg} \
+      ${annotateArg} \
+      ${edgeArg} \
       --output-dir . \
-      --diagram \
-      --scatter \
       --processes ${task.cpus} \
       ${drop} \
       ${params.cnvkit_extra_batch_args}
+
+    for cns in *.cns; do
+      base=\$(basename "\${cns}" .cns)
+      cnvkit.py call "\${cns}" --method ${params.cnvkit_call_method} --output "\${base}.called.cns"
+    done
     """
 
     stub:
     """
-    touch ${meta.id}.marked.filtered.cns
-    """
-}
-
-process CNVKIT_CALL {
-    tag "${meta.id}"
-    publishDir "${params.outdir}/cnvkit/${meta.id}", mode: 'copy'
-
-    input:
-    tuple val(meta), path(cns)
-
-    output:
-    tuple val(meta), path("${meta.id}.called.cns"), emit: called
-
-    script:
-    """
-    cnvkit.py call ${cns} --method ${params.cnvkit_call_method} --output ${meta.id}.called.cns
-    """
-
-    stub:
-    """
-    touch ${meta.id}.called.cns
+    touch ${group}.stub.cns
+    touch ${group}.stub.called.cns
     """
 }
 
@@ -413,33 +394,49 @@ workflow {
     MULTIQC(multiqc_inputs)
 
     if (cnvMethods.contains('cnvkit')) {
-        normal_bams_by_group = BWA_MEM_FILTER.out.bam
-            .filter { meta, bam, bai, flagstat -> normalRoles.contains(meta.role.toLowerCase()) }
-            .map { meta, bam, bai, flagstat -> tuple(meta.group, bam) }
-            .groupTuple()
+        BWA_MEM_FILTER.out.bam
+            .collect()
+            .map { rows ->
+                def caseBams = []
+                def caseBais = []
+                def normalBams = []
+                def normalBais = []
 
-        CNVKIT_REFERENCE(normal_bams_by_group)
+                for (int i = 0; i < rows.size(); ) {
+                    def meta
+                    def bam
+                    def bai
+                    def row = rows[i]
 
-        case_bams_by_group = BWA_MEM_FILTER.out.bam
-            .filter { meta, bam, bai, flagstat -> !normalRoles.contains(meta.role.toLowerCase()) }
-            .map { meta, bam, bai, flagstat -> tuple(meta.group, meta, bam, bai, flagstat) }
+                    if (row instanceof Map && row.containsKey('role')) {
+                        meta = row
+                        bam = rows[i + 1]
+                        bai = rows[i + 2]
+                        i += 4
+                    } else {
+                        meta = row[0]
+                        bam = row[1]
+                        bai = row[2]
+                        i += 1
+                    }
 
-        cnvkit_refs_by_group = CNVKIT_REFERENCE.out.reference
-            .map { group, reference -> tuple(group, reference) }
+                    if (normalRoles.contains(meta.role.toLowerCase())) {
+                        normalBams << bam
+                        normalBais << bai
+                    } else {
+                        caseBams << bam
+                        caseBais << bai
+                    }
+                }
 
-        case_bams_by_group
-            .join(cnvkit_refs_by_group)
-            .map { group, meta, bam, bai, flagstat, reference ->
-                tuple(tuple(meta, bam, bai, flagstat), tuple(group, reference))
+                tuple('all_samples', caseBams, caseBais, normalBams, normalBais)
             }
-            .multiMap { sample_tuple, ref_tuple ->
-                sample: sample_tuple
-                ref: ref_tuple
+            .filter { group, caseBams, caseBais, normalBams, normalBais ->
+                caseBams && normalBams
             }
-            .set { cnvkit_inputs }
+            .set { cnvkit_group_inputs }
 
-        CNVKIT_BATCH(cnvkit_inputs.sample, cnvkit_inputs.ref)
-        CNVKIT_CALL(CNVKIT_BATCH.out.cns)
+        CNVKIT_BATCH_GROUP(cnvkit_group_inputs)
     }
 
     if (cnvMethods.contains('gatk')) {

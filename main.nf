@@ -2,61 +2,20 @@
 
 nextflow.enable.dsl = 2
 
-def normalRoles = ['normal', 'control', 'reference'] as Set
-def cnvMethods = params.cnv_method.tokenize(',').collect { it.trim().toLowerCase() } as Set
-def cnvkitSeqMethod = (params.cnvkit_seq_method ?: 'wgs').toLowerCase()
-if (cnvMethods.contains('both')) {
-    cnvMethods = ['cnvkit', 'gatk'] as Set
-}
-if (!cnvMethods.every { it in ['cnvkit', 'gatk'] }) {
-    error "params.cnv_method must be 'cnvkit', 'gatk', or 'both'"
-}
-if (!(cnvkitSeqMethod in ['wgs', 'hybrid', 'amplicon'])) {
-    error "params.cnvkit_seq_method must be 'wgs', 'hybrid', or 'amplicon'"
-}
-def cnvkitAnnotateRaw = (params.cnvkit_annotate ?: params.annotate ?: params.cnvkit_refflat ?: params.refflat ?: '').toString().trim()
-def cnvkitAnnotateAsBool = cnvkitAnnotateRaw.toLowerCase() in ['true', 'yes', '1']
-def cnvkitRefflatPath = (params.cnvkit_refflat ?: params.refflat ?: '').toString().trim()
-if (cnvkitAnnotateAsBool && !cnvkitRefflatPath) {
-    error "cnvkit_annotate is set to true, but no refFlat path was provided. Set params.cnvkit_refflat (or params.refflat) to the refFlat file path."
-}
-
 process FASTQC_RAW {
     tag "${meta.id}"
     publishDir "${params.outdir}/qc/raw/${meta.id}", mode: 'copy'
-    errorStrategy 'ignore'
 
     input:
-    tuple val(meta), path(reads)
+    tuple val(meta), path(r1), path(r2)
 
     output:
-    tuple val(meta), path("${meta.id}.raw_fastqc.done")
     path("*_fastqc.html"), emit: html
     path("*_fastqc.zip"), emit: zip
 
     script:
     """
-    set +e
-    fastqc -t ${task.cpus} ${reads}
-    fastqc_status=\$?
-    set -e
-    if [[ \$fastqc_status -ne 0 ]]; then
-      echo "WARN: FASTQC_RAW failed for ${meta.id}; creating placeholder outputs so pipeline can continue" >&2
-      for read in ${reads}; do
-        base=\$(basename "\$read")
-        stem=\${base%.gz}
-        stem=\${stem%.fastq}
-        stem=\${stem%.fq}
-        touch "\${stem}_fastqc.html" "\${stem}_fastqc.zip"
-      done
-    fi
-    touch ${meta.id}.raw_fastqc.done
-    """
-
-    stub:
-    """
-    touch ${meta.id}.raw_fastqc.done
-    touch ${meta.id}_R1_fastqc.html ${meta.id}_R1_fastqc.zip
+    fastqc -t ${task.cpus} ${r1} ${r2}
     """
 }
 
@@ -83,56 +42,26 @@ process FASTP_TRIM {
       --json ${meta.id}.fastp.json \
       --thread ${task.cpus}
     """
-
-    stub:
-    """
-    touch ${meta.id}_trimmed_R1.fastq.gz
-    touch ${meta.id}_trimmed_R2.fastq.gz
-    touch ${meta.id}.fastp.html
-    touch ${meta.id}.fastp.json
-    """
 }
 
 process FASTQC_TRIMMED {
     tag "${meta.id}"
     publishDir "${params.outdir}/qc/trimmed/${meta.id}", mode: 'copy'
-    errorStrategy 'ignore'
 
     input:
     tuple val(meta), path(r1), path(r2)
 
     output:
-    tuple val(meta), path("${meta.id}.trimmed_fastqc.done")
     path("*_fastqc.html"), emit: html
     path("*_fastqc.zip"), emit: zip
 
     script:
     """
-    set +e
     fastqc -t ${task.cpus} ${r1} ${r2}
-    fastqc_status=\$?
-    set -e
-    if [[ \$fastqc_status -ne 0 ]]; then
-      echo "WARN: FASTQC_TRIMMED failed for ${meta.id}; creating placeholder outputs so pipeline can continue" >&2
-      for read in ${r1} ${r2}; do
-        base=\$(basename "\$read")
-        stem=\${base%.gz}
-        stem=\${stem%.fastq}
-        stem=\${stem%.fq}
-        touch "\${stem}_fastqc.html" "\${stem}_fastqc.zip"
-      done
-    fi
-    touch ${meta.id}.trimmed_fastqc.done
-    """
-
-    stub:
-    """
-    touch ${meta.id}.trimmed_fastqc.done
-    touch ${meta.id}_trimmed_R1_fastqc.html ${meta.id}_trimmed_R1_fastqc.zip
     """
 }
 
-process BWA_MEM_FILTER {
+process BWA_MEM_MAP {
     tag "${meta.id}"
     publishDir "${params.outdir}/mapping/bam", mode: 'copy'
 
@@ -140,7 +69,7 @@ process BWA_MEM_FILTER {
     tuple val(meta), path(r1), path(r2)
 
     output:
-    tuple val(meta), path("${meta.id}.filtered.bam"), path("${meta.id}.filtered.bam.bai"), path("${meta.id}.flagstat.tsv"), emit: bam
+    tuple val(meta), path("${meta.id}.mapped.bam"), path("${meta.id}.mapped.bam.bai"), path("${meta.id}.flagstat.tsv"), emit: bam
 
     script:
     def ref = params.bwa_index_prefix ?: params.reference_fasta
@@ -148,36 +77,15 @@ process BWA_MEM_FILTER {
     set -euo pipefail
 
     bwa mem -t ${task.cpus} ${ref} ${r1} ${r2} \
-      2> ${meta.id}.bwa.stderr.log \
-      | tee >(samtools view -@ ${task.cpus} -c - > ${meta.id}.bwa_sam_count.txt) \
       | samtools collate -@ ${task.cpus} -O -u - \
       | samtools fixmate -@ ${task.cpus} -m -u - - \
       | samtools sort -@ ${task.cpus} -u - \
       | samtools markdup -@ ${task.cpus} - - \
-      | samtools view -@ ${task.cpus} -b -q ${params.min_mapq} -F ${params.exclude_flags} - \
-      | samtools sort -@ ${task.cpus} -o ${meta.id}.filtered.bam -
+      | samtools view -@ ${task.cpus} -b - \
+      | samtools sort -@ ${task.cpus} -o ${meta.id}.mapped.bam -
 
-    final_count=\$(samtools view -@ ${task.cpus} -c ${meta.id}.filtered.bam)
-    if [[ "\${final_count}" -eq 0 ]]; then
-      echo "ERROR: ${meta.id}.filtered.bam has zero alignments after filtering. See ${meta.id}.bwa.stderr.log and ${meta.id}.bwa_sam_count.txt" >&2
-      exit 1
-    fi
-
-    samtools index -@ ${task.cpus} ${meta.id}.filtered.bam
-    samtools flagstat -@ ${task.cpus} -O tsv ${meta.id}.filtered.bam > ${meta.id}.flagstat.tsv
-    {
-      echo "# bwa_sam_count"
-      cat ${meta.id}.bwa_sam_count.txt
-      echo "# filtered_bam_count"
-      echo "\${final_count}"
-    } > ${meta.id}.mapping_diagnostics.txt
-    """
-
-    stub:
-    """
-    touch ${meta.id}.filtered.bam
-    touch ${meta.id}.filtered.bam.bai
-    touch ${meta.id}.flagstat.tsv
+    samtools index -@ ${task.cpus} ${meta.id}.mapped.bam
+    samtools flagstat -@ ${task.cpus} -O tsv ${meta.id}.mapped.bam > ${meta.id}.flagstat.tsv
     """
 }
 
@@ -194,19 +102,14 @@ process MULTIQC {
     """
     multiqc . --filename multiqc_report.html
     """
-
-    stub:
-    """
-    touch multiqc_report.html
-    """
 }
 
-process CNVKIT_BATCH_GROUP {
-    tag "${group}"
-    publishDir "${params.outdir}/cnvkit/${group}", mode: 'copy'
+process CNVKIT_BATCH {
+    publishDir "${params.outdir}/cnvkit", mode: 'copy'
 
     input:
-    tuple val(group), path(case_bams), path(case_bais), path(normal_bams), path(normal_bais)
+    path(case_bams)
+    path(normal_bams)
 
     output:
     path("*.cnr"), emit: cnr
@@ -215,226 +118,39 @@ process CNVKIT_BATCH_GROUP {
 
     script:
     def seqMethod = (params.cnvkit_seq_method ?: 'wgs').toLowerCase()
-    def methodArg = "--method ${seqMethod}"
-    def drop = params.cnvkit_drop_low_coverage ? '--drop-low-coverage' : ''
-    def annotateRaw = (params.cnvkit_annotate ?: params.annotate ?: params.cnvkit_refflat ?: params.refflat ?: '').toString().trim()
-    def annotateAsBool = annotateRaw.toLowerCase() in ['true', 'yes', '1']
-    def refflatPath = (params.cnvkit_refflat ?: params.refflat ?: '').toString().trim()
-    def annotatePath = annotateAsBool ? refflatPath : annotateRaw
-    def annotateArg = annotatePath ? "--annotate ${annotatePath}" : ''
-    def edgeArg = params.cnvkit_no_edge ? '--no-edge' : ''
-    def accessArg = (seqMethod == 'wgs' && params.access_bed) ? "--access ${params.access_bed}" : ''
     def caseArgs = case_bams.collect { it.toString() }.join(' ')
     def normalArgs = normal_bams.collect { it.toString() }.join(' ')
+    def annotateArg = params.cnvkit_annotate ? "--annotate ${params.cnvkit_annotate}" : ''
     """
     cnvkit.py batch ${caseArgs} \
       --normal ${normalArgs} \
-      ${methodArg} \
+      --method ${seqMethod} \
       --fasta ${params.reference_fasta} \
-      ${accessArg} \
       ${annotateArg} \
       --output-dir . \
       --processes ${task.cpus} \
-      ${drop} \
       ${params.cnvkit_extra_batch_args}
 
     for cns in *.cns; do
-      base=\$(basename "\${cns}" .cns)
-      cnvkit.py call "\${cns}" --method ${params.cnvkit_call_method} --output "\${base}.called.cns"
+      base=$(basename "${cns}" .cns)
+      cnvkit.py call "${cns}" --method ${params.cnvkit_call_method} --output "${base}.called.cns"
     done
-    """
-
-    stub:
-    """
-    touch ${group}.stub.cnr
-    touch ${group}.stub.cns
-    touch ${group}.stub.called.cns
-    """
-}
-
-process GATK_PREPROCESS_INTERVALS {
-    publishDir "${params.outdir}/gatk_cnv/targets", mode: 'copy'
-
-    output:
-    tuple path("preprocessed_intervals.interval_list"), path("annotated_intervals.tsv"), emit: intervals
-
-    script:
-    """
-    gatk PreprocessIntervals \
-      -R ${params.reference_fasta} \
-      -L ${params.targets_bed} \
-      --interval-merging-rule ${params.gatk_interval_merging_rule} \
-      -O preprocessed_intervals.interval_list
-
-    gatk AnnotateIntervals \
-      -R ${params.reference_fasta} \
-      -L preprocessed_intervals.interval_list \
-      --interval-merging-rule ${params.gatk_interval_merging_rule} \
-      -O annotated_intervals.tsv
-    """
-
-    stub:
-    """
-    touch preprocessed_intervals.interval_list
-    touch annotated_intervals.tsv
-    """
-}
-
-process GATK_COLLECT_COUNTS {
-    tag "${meta.id}"
-    publishDir "${params.outdir}/gatk_cnv/counts", mode: 'copy'
-
-    input:
-    tuple val(meta), path(bam), path(bai), path(flagstat), path(intervals), path(annotated)
-
-    output:
-    tuple val(meta), path("${meta.id}.counts.hdf5"), emit: counts
-
-    script:
-    """
-    gatk CollectReadCounts \
-      -I ${bam} \
-      -L ${intervals} \
-      -R ${params.reference_fasta} \
-      --interval-merging-rule ${params.gatk_interval_merging_rule} \
-      --format HDF5 \
-      -O ${meta.id}.counts.hdf5
-    """
-
-    stub:
-    """
-    touch ${meta.id}.counts.hdf5
-    """
-}
-
-process GATK_PANEL_OF_NORMALS {
-    tag "${group}"
-    publishDir "${params.outdir}/gatk_cnv/pon", mode: 'copy'
-
-    input:
-    tuple val(group), path(normal_counts), path(annotated)
-
-    output:
-    tuple val(group), path("${group}.pon.hdf5"), emit: pon
-
-    script:
-    def countArgs = normal_counts.collect { "-I ${it}" }.join(' ')
-    """
-    gatk CreateReadCountPanelOfNormals \
-      ${countArgs} \
-      --annotated-intervals ${annotated} \
-      -O ${group}.pon.hdf5
-    """
-
-    stub:
-    """
-    touch ${group}.pon.hdf5
-    """
-}
-
-process GATK_DENOISE {
-    tag "${meta.id}"
-    publishDir "${params.outdir}/gatk_cnv/denoised", mode: 'copy'
-
-    input:
-    tuple val(meta), path(counts)
-    tuple val(group), path(pon)
-
-    output:
-    tuple val(meta), path("${meta.id}.standardizedCR.tsv"), path("${meta.id}.denoisedCR.tsv"), emit: denoised
-
-    script:
-    """
-    gatk DenoiseReadCounts \
-      -I ${counts} \
-      --count-panel-of-normals ${pon} \
-      --standardized-copy-ratios ${meta.id}.standardizedCR.tsv \
-      --denoised-copy-ratios ${meta.id}.denoisedCR.tsv
-    """
-
-    stub:
-    """
-    touch ${meta.id}.standardizedCR.tsv
-    touch ${meta.id}.denoisedCR.tsv
-    """
-}
-
-process GATK_MODEL_SEGMENTS {
-    tag "${meta.id}"
-    publishDir "${params.outdir}/gatk_cnv/segments", mode: 'copy'
-
-    input:
-    tuple val(meta), path(standardized), path(denoised)
-
-    output:
-    tuple val(meta), path("${meta.id}.cr.seg"), emit: segments
-
-    script:
-    """
-    gatk ModelSegments \
-      --denoised-copy-ratios ${denoised} \
-      --output . \
-      --output-prefix ${meta.id} \
-      --number-of-changepoints-penalty-factor ${params.gatk_changepoint_penalty}
-    """
-
-    stub:
-    """
-    touch ${meta.id}.cr.seg
-    """
-}
-
-process GATK_CALL_SEGMENTS {
-    tag "${meta.id}"
-    publishDir "${params.outdir}/gatk_cnv/segments", mode: 'copy'
-
-    input:
-    tuple val(meta), path(segments)
-
-    output:
-    tuple val(meta), path("${meta.id}.called.seg"), emit: called
-
-    script:
-    """
-    gatk CallCopyRatioSegments --input ${segments} --output ${meta.id}.called.seg
-    """
-
-    stub:
-    """
-    touch ${meta.id}.called.seg
     """
 }
 
 workflow {
-    def sampleRows = file(params.samples).readLines().findAll { it?.trim() }
-    def header = sampleRows[0].split('\t', -1) as List
-    def sampleMaps = sampleRows.drop(1).collect { line ->
-        def cols = line.split('\t', -1) as List
-        [header, cols].transpose().collectEntries { k, v -> [(k): v] }
-    }
-    def expectedCaseCount = sampleMaps.count { row -> !normalRoles.contains((row.cnv_role ?: '').toLowerCase()) }
-    def expectedNormalCount = sampleMaps.count { row -> normalRoles.contains((row.cnv_role ?: '').toLowerCase()) }
-
     samples_ch = Channel
         .fromPath(params.samples)
         .splitCsv(header: true, sep: '\t')
         .map { row ->
-            def meta = [
-                id: row.sample,
-                role: row.cnv_role,
-                group: row.cnv_reference_group,
-                library: row.read_group_library ?: 'lib1',
-                unit: row.read_group_unit ?: 'unit1'
-            ]
+            def meta = [id: row.sample, role: (row.cnv_role ?: '').toLowerCase()]
             tuple(meta, file(row.fastq_r1), file(row.fastq_r2))
         }
 
-    raw_reads_ch = samples_ch.map { meta, r1, r2 -> tuple(meta, [r1, r2]) }
-
-    FASTQC_RAW(raw_reads_ch)
+    FASTQC_RAW(samples_ch)
     FASTP_TRIM(samples_ch)
     FASTQC_TRIMMED(FASTP_TRIM.out.trimmed)
-    BWA_MEM_FILTER(FASTP_TRIM.out.trimmed)
+    BWA_MEM_MAP(FASTP_TRIM.out.trimmed)
 
     multiqc_inputs = FASTQC_RAW.out.html
         .mix(FASTQC_RAW.out.zip)
@@ -442,93 +158,19 @@ workflow {
         .mix(FASTQC_TRIMMED.out.zip)
         .mix(FASTP_TRIM.out.html)
         .mix(FASTP_TRIM.out.json)
-        .mix(BWA_MEM_FILTER.out.bam.map { meta, bam, bai, flagstat -> flagstat })
+        .mix(BWA_MEM_MAP.out.bam.map { meta, bam, bai, flagstat -> flagstat })
         .collect()
     MULTIQC(multiqc_inputs)
 
-    if (cnvMethods.contains('cnvkit')) {
-        BWA_MEM_FILTER.out.bam
-            .collect()
-            .map { rows ->
-                def caseBams = []
-                def caseBais = []
-                def normalBams = []
-                def normalBais = []
+    case_bams_ch = BWA_MEM_MAP.out.bam
+        .filter { meta, bam, bai, flagstat -> !(meta.role in ['normal', 'control', 'reference']) }
+        .map { meta, bam, bai, flagstat -> bam }
+        .collect()
 
-                for (int i = 0; i < rows.size(); ) {
-                    def meta
-                    def bam
-                    def bai
-                    def row = rows[i]
+    normal_bams_ch = BWA_MEM_MAP.out.bam
+        .filter { meta, bam, bai, flagstat -> meta.role in ['normal', 'control', 'reference'] }
+        .map { meta, bam, bai, flagstat -> bam }
+        .collect()
 
-                    if (row instanceof Map && row.containsKey('role')) {
-                        meta = row
-                        bam = rows[i + 1]
-                        bai = rows[i + 2]
-                        i += 4
-                    } else {
-                        meta = row[0]
-                        bam = row[1]
-                        bai = row[2]
-                        i += 1
-                    }
-
-                    if (normalRoles.contains(meta.role.toLowerCase())) {
-                        normalBams << bam
-                        normalBais << bai
-                    } else {
-                        caseBams << bam
-                        caseBais << bai
-                    }
-                }
-
-                if (caseBams.size() != expectedCaseCount || normalBams.size() != expectedNormalCount) {
-                    error "CNVKIT input BAM count mismatch: expected ${expectedCaseCount} case + ${expectedNormalCount} normal BAMs, got ${caseBams.size()} case + ${normalBams.size()} normal. Re-run without -resume after cleaning stale BWA work dirs."
-                }
-                tuple('all_samples', caseBams, caseBais, normalBams, normalBais)
-            }
-            .filter { group, caseBams, caseBais, normalBams, normalBais ->
-                caseBams && normalBams
-            }
-            .set { cnvkit_group_inputs }
-
-        CNVKIT_BATCH_GROUP(cnvkit_group_inputs)
-    }
-
-    if (cnvMethods.contains('gatk')) {
-        GATK_PREPROCESS_INTERVALS()
-        gatk_count_inputs = BWA_MEM_FILTER.out.bam.combine(GATK_PREPROCESS_INTERVALS.out.intervals)
-        GATK_COLLECT_COUNTS(gatk_count_inputs)
-
-        normal_counts_by_group = GATK_COLLECT_COUNTS.out.counts
-            .filter { meta, counts -> normalRoles.contains(meta.role.toLowerCase()) }
-            .map { meta, counts -> tuple(meta.group, counts) }
-            .groupTuple()
-
-        annotated_intervals = GATK_PREPROCESS_INTERVALS.out.intervals.map { intervals, annotated -> annotated }
-        normal_counts_with_intervals = normal_counts_by_group.combine(annotated_intervals)
-        GATK_PANEL_OF_NORMALS(normal_counts_with_intervals)
-
-        case_counts_by_group = GATK_COLLECT_COUNTS.out.counts
-            .filter { meta, counts -> !normalRoles.contains(meta.role.toLowerCase()) }
-            .map { meta, counts -> tuple(meta.group, meta, counts) }
-
-        gatk_pons_by_group = GATK_PANEL_OF_NORMALS.out.pon
-            .map { group, pon -> tuple(group, pon) }
-
-        case_counts_by_group
-            .join(gatk_pons_by_group)
-            .map { group, meta, counts, pon ->
-                tuple(tuple(meta, counts), tuple(group, pon))
-            }
-            .multiMap { counts_tuple, pon_tuple ->
-                counts: counts_tuple
-                pon: pon_tuple
-            }
-            .set { gatk_inputs }
-
-        GATK_DENOISE(gatk_inputs.counts, gatk_inputs.pon)
-        GATK_MODEL_SEGMENTS(GATK_DENOISE.out.denoised)
-        GATK_CALL_SEGMENTS(GATK_MODEL_SEGMENTS.out.segments)
-    }
+    CNVKIT_BATCH(case_bams_ch, normal_bams_ch)
 }

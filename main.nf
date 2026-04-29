@@ -394,32 +394,28 @@ workflow {
     MULTIQC(multiqc_inputs)
 
     if (cnvMethods.contains('cnvkit')) {
-        normal_bams_all = BWA_MEM_FILTER.out.bam
-            .filter { meta, bam, bai, flagstat -> normalRoles.contains(meta.role.toLowerCase()) }
-            .map { meta, bam, bai, flagstat -> bam }
+        BWA_MEM_FILTER.out.bam
             .collect()
+            .map { rows ->
+                def caseBams = []
+                def caseBais = []
+                def normalBams = []
+                def normalBais = []
 
-        normal_bais_all = BWA_MEM_FILTER.out.bam
-            .filter { meta, bam, bai, flagstat -> normalRoles.contains(meta.role.toLowerCase()) }
-            .map { meta, bam, bai, flagstat -> bai }
-            .collect()
+                rows.each { meta, bam, bai, flagstat ->
+                    if (normalRoles.contains(meta.role.toLowerCase())) {
+                        normalBams << bam
+                        normalBais << bai
+                    } else {
+                        caseBams << bam
+                        caseBais << bai
+                    }
+                }
 
-        case_bams_all = BWA_MEM_FILTER.out.bam
-            .filter { meta, bam, bai, flagstat -> !normalRoles.contains(meta.role.toLowerCase()) }
-            .map { meta, bam, bai, flagstat -> bam }
-            .collect()
-
-        case_bais_all = BWA_MEM_FILTER.out.bam
-            .filter { meta, bam, bai, flagstat -> !normalRoles.contains(meta.role.toLowerCase()) }
-            .map { meta, bam, bai, flagstat -> bai }
-            .collect()
-
-        case_bams_all
-            .combine(case_bais_all)
-            .combine(normal_bams_all)
-            .combine(normal_bais_all)
-            .map { vals ->
-                tuple('all_samples', vals[0], vals[1], vals[2], vals[3])
+                tuple('all_samples', caseBams, caseBais, normalBams, normalBais)
+            }
+            .filter { group, caseBams, caseBais, normalBams, normalBais ->
+                caseBams && normalBams
             }
             .set { cnvkit_group_inputs }
 

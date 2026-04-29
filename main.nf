@@ -166,6 +166,7 @@ process CNVKIT_BATCH_GROUP {
     tuple val(group), path(case_bams), path(case_bais), path(normal_bams), path(normal_bais)
 
     output:
+    path("*.cnr"), emit: cnr
     path("*.cns"), emit: cns
     path("*.called.cns"), emit: called
 
@@ -203,6 +204,7 @@ process CNVKIT_BATCH_GROUP {
 
     stub:
     """
+    touch ${group}.stub.cnr
     touch ${group}.stub.cns
     touch ${group}.stub.called.cns
     """

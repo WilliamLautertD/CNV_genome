@@ -59,6 +59,7 @@ The CNVkit path is now WGS-first (`params.cnvkit_seq_method = 'wgs'`) so it work
 - `params.cnvkit_no_edge = true` is enabled by default, matching CNVkit WGS recommendations.
 - To enable gene labels, either set `params.cnvkit_annotate` directly to the refFlat path, or set `params.cnvkit_annotate = 'true'` and provide `params.cnvkit_refflat = '/refs/refFlat.txt'`.
 - Backward compatibility: `params.annotate` and `params.refflat` are accepted aliases.
+- CNVkit outputs include both per-sample `.cnr` and `.cns` files (plus `.called.cns` after `cnvkit.py call`).
 
 Samples with `cnv_role` set to `normal`, `control`, or `reference` are used for CNV references. Other roles, such as `case` or `treated`, are CNV-called against their `cnv_reference_group`.
 

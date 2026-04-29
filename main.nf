@@ -190,7 +190,6 @@ process CNVKIT_BATCH_GROUP {
       --fasta ${params.reference_fasta} \
       ${accessArg} \
       ${annotateArg} \
-      ${edgeArg} \
       --output-dir . \
       --processes ${task.cpus} \
       ${drop} \

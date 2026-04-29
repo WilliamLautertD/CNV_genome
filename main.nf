@@ -402,10 +402,24 @@ workflow {
                 def normalBams = []
                 def normalBais = []
 
-                rows.each { row ->
-                    def meta = row[0]
-                    def bam = row[1]
-                    def bai = row[2]
+                for (int i = 0; i < rows.size(); ) {
+                    def meta
+                    def bam
+                    def bai
+                    def row = rows[i]
+
+                    if (row instanceof Map && row.containsKey('role')) {
+                        meta = row
+                        bam = rows[i + 1]
+                        bai = rows[i + 2]
+                        i += 4
+                    } else {
+                        meta = row[0]
+                        bam = row[1]
+                        bai = row[2]
+                        i += 1
+                    }
+
                     if (normalRoles.contains(meta.role.toLowerCase())) {
                         normalBams << bam
                         normalBais << bai

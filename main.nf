@@ -132,8 +132,8 @@ process CNVKIT_BATCH {
       ${params.cnvkit_extra_batch_args}
 
     for cns in *.cns; do
-      base=\$(basename "\${cns}" .cns)
-      cnvkit.py call "\${cns}" --method ${params.cnvkit_call_method} --output "\${base}.called.cns"
+      base=$(basename "${cns}" .cns)
+      cnvkit.py call "${cns}" --method ${params.cnvkit_call_method} --output "${base}.called.cns"
     done
     """
 }

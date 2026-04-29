@@ -402,7 +402,10 @@ workflow {
                 def normalBams = []
                 def normalBais = []
 
-                rows.each { meta, bam, bai, flagstat ->
+                rows.each { row ->
+                    def meta = row[0]
+                    def bam = row[1]
+                    def bai = row[2]
                     if (normalRoles.contains(meta.role.toLowerCase())) {
                         normalBams << bam
                         normalBais << bai
